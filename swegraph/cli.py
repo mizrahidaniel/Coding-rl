@@ -4,6 +4,7 @@ import argparse
 import base64
 import gzip
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -437,7 +438,20 @@ def cmd_generate(args):
 
 def cmd_run(args):
     reward_cfg = load_reward_config(Path(args.reward_config)) if args.reward_config else None
+    _apply_llm_flags(args)
     run_task(Path(args.task), args.baseline, Path(args.out), mode=args.mode, reward_override=reward_cfg)
+
+
+def _apply_llm_flags(args) -> None:
+    """LLM-baseline flags are read by run_llm_baseline via env vars so the
+    baseline iterator stays a plain (api, task) -> Iterator function. The CLI
+    surfaces them as proper flags and pushes them into the env."""
+    if getattr(args, "llm_model", None):
+        os.environ["SWEGRAPH_LLM_MODEL"] = args.llm_model
+    if getattr(args, "llm_max_steps", None):
+        os.environ["SWEGRAPH_LLM_MAX_STEPS"] = str(args.llm_max_steps)
+    if getattr(args, "llm_effort", None):
+        os.environ["SWEGRAPH_LLM_EFFORT"] = args.llm_effort
 
 
 def cmd_eval(args):
@@ -447,6 +461,7 @@ def cmd_eval(args):
 
 
 def cmd_batch(args):
+    _apply_llm_flags(args)
     tasks_dir = Path(args.tasks)
     tasks = sorted(tasks_dir.glob("task_*.json")) + sorted(tasks_dir.glob("ingest_task_*.json"))
     out_root = Path(args.out)
@@ -535,6 +550,9 @@ def main():
     r.add_argument("--out", required=True)
     r.add_argument("--mode", choices=["training", "benchmark"], default="training")
     r.add_argument("--reward-config", default=None)
+    r.add_argument("--llm-model", default=None, help="Override the model used by the `llm` baseline (default claude-opus-4-7)")
+    r.add_argument("--llm-max-steps", type=int, default=None, help="Override the per-task LLM step budget (default 30)")
+    r.add_argument("--llm-effort", choices=["low", "medium", "high", "xhigh", "max"], default=None, help="Override the LLM effort level (default high)")
     r.set_defaults(func=cmd_run)
 
     e = sp.add_parser("eval")
@@ -548,6 +566,9 @@ def main():
     b.add_argument("--mode", choices=["training", "benchmark"], default="training")
     b.add_argument("--clean", action="store_true")
     b.add_argument("--reward-config", default=None)
+    b.add_argument("--llm-model", default=None)
+    b.add_argument("--llm-max-steps", type=int, default=None)
+    b.add_argument("--llm-effort", choices=["low", "medium", "high", "xhigh", "max"], default=None)
     b.set_defaults(func=cmd_batch)
 
     bp = sp.add_parser("batch-prm")

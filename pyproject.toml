@@ -1,7 +1,14 @@
 [project]
 name = "swegraph"
-version = "0.1.0"
+version = "0.4.0"
 requires-python = ">=3.11"
+
+[project.optional-dependencies]
+# `pip install -e '.[llm]'` to enable the `llm` baseline (real Claude
+# rollouts via the official Anthropic SDK). Hypothesis is required by the
+# property/metamorphic validators shipped in v2.
+llm = ["anthropic>=0.50.0"]
+hypothesis = ["hypothesis>=6.100.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
