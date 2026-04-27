@@ -6,7 +6,7 @@ from swegraph.utils.prompts import generate_prompts
 
 def generate_feature_addition_task(task_id: str, seed: int, reward_config: dict[str, float]) -> TaskSpec:
     repo_id = "todo_cli"
-    formal, user, hidden = generate_prompts(repo_id, "feature_addition", "--done flag")
+    formal, user, hidden = generate_prompts(repo_id, "feature_addition", "--done flag", seed=seed)
     hidden_test = """from todo_cli.core import list_tasks\n\n\ndef test_list_tasks_backwards_compatible():\n    tasks = [{\"title\": \"x\", \"done\": False}, {\"title\": \"y\", \"done\": True}]\n    assert len(list_tasks(tasks)) == 2\n\n\ndef test_list_tasks_done_filter():\n    tasks = [{\"title\": \"x\", \"done\": False}, {\"title\": \"y\", \"done\": True}]\n    assert list_tasks(tasks, done=True) == [{\"title\": \"y\", \"done\": True}]\n"""
     return TaskSpec(
         task_id=task_id,
