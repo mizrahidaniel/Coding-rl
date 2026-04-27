@@ -50,11 +50,14 @@ def test_property_validator_catches_off_by_one(tmp_path: Path):
         "module": "stats_utils.core",
         "function": "percentile",
         "strategy": [
-            {"kind": "lists", "of": "integers", "min_value": -100, "max_value": 100, "min_size": 2, "max_size": 30},
-            {"kind": "integers", "min_value": 0, "max_value": 100},
+            # Bias the search toward small lists where rounding errors at the
+            # end of the index range happen for many p values, so the buggy
+            # variant deterministically hits IndexError under sampling.
+            {"kind": "lists", "of": "integers", "min_value": -100, "max_value": 100, "min_size": 2, "max_size": 6},
+            {"kind": "integers", "min_value": 50, "max_value": 99},
         ],
         "assertion": "result is None or (min(args[0]) <= result <= max(args[0]))",
-        "max_examples": 80,
+        "max_examples": 200,
     }
     [r] = run_validators(workspace, [spec])
     # The buggy variant exceeds max(values) for some inputs; property must fail.

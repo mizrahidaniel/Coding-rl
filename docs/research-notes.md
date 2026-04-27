@@ -93,7 +93,7 @@ as such.
   not yet have an empirical curve showing model success rate decreasing in
   hop count. The infrastructure is there; the experiment isn't run.
 - **Mutmut on real repos is the only way the toy-fixtures critique goes
-  away.** v2 deliberately deferred this; v3 must ship it.
+  away.** v2 deliberately deferred this; v3 must ship it.  ← **closed in v3**
 - **Single-oracle problem is only partially solved.** PBT validates
   behaviour, but `oracle_metadata` still records one canonical patch.
   Localization-correct uses that one canonical reading-order. Both should
@@ -101,6 +101,74 @@ as such.
 - **Calibrated decontamination metric not shipped.** Mutual information
   between hidden spec and public test surface would directly quantify what
   v2 claims about decontamination. Future work.
+
+---
+
+## v3 — real-repo ingestion via AST mutators
+
+The biggest planning-agent risk on v2 was: "toy fixtures don't generalise
+until real-repo ingestion ships." v3 closes that gap with a procedural
+mutation pipeline (`swegraph/ingest/`) that operates on any Python repo
+with a green test suite.
+
+### Why an AST mutator instead of mutmut
+
+Two motivations:
+
+1. **Honesty.** Mutmut's mutation registry, equivalence filtering, and
+   hash cache are sophisticated, but they are also a black box. By writing
+   the operators ourselves (~250 LOC, five families: `off_by_one`,
+   `compare_swap`, `boolean_flip`, `return_value`, `binary_op`) we own the
+   end-to-end story and can reason about what mutations are emitted on
+   any given source file.
+2. **Precision.** Mutmut applies mutations as text patches and relies on
+   global string replacement, which fails on short tokens like ``and`` /
+   ``or`` / ``+``. Our mutator records ``(line, col, before, after)`` for
+   every mutation and applies it precisely. That precision flows through
+   the runtime (``cli._apply_mutation`` and ``oracle_patch.py``) so the
+   reverse-mutation oracle never accidentally rewrites the wrong token.
+
+The five operator families are deliberately the same families mutmut
+implements; the contribution is the precise application + the
+public/hidden split coupling, not the mutation taxonomy.
+
+### Why the public/hidden split is the real wedge
+
+A surviving mutation alone is not a SWEGraph task — to be useful it must
+be *decidable* (the hidden validator catches it) and *non-trivial* (the
+public surface doesn't already make the bug obvious). The ingest pipeline
+sweeps a small fan of split seeds and accepts only mutations where
+**public passes + hidden fails** (preferred) or, failing that,
+**public also fails + hidden fails** (fallback). The agent then sees a
+plausible-looking workspace where public tests don't tell it the answer,
+and must infer the property the hidden split encodes — exactly the
+shape SWE-bench Verified has but constructed automatically.
+
+### Honest numbers
+
+On the vendored `reqparse_lite` fixture (3 modules, 250 LOC source, 42
+public tests):
+- 14 killed mutations, 12 yield decidable tasks, 2 reject (no split
+  produces a public-misses + hidden-catches partition under the seed fan
+  we try).
+- Oracle solves 12/12 (precise reverse-mutation).
+- do_nothing 0/12 (lower bound holds).
+- **naive 0/12** — the v2 heuristic regex doesn't match these AST
+  mutations on real code. This is the difficulty gradient v1's planning
+  agent demanded and v2 didn't deliver.
+
+### What v3 explicitly does NOT claim
+
+- That it's been validated on real PyPI packages. It hasn't — the
+  pipeline is repo-agnostic but the only target shipped is
+  `reqparse_lite`. v4 should add `--pypi <package>` and demonstrate
+  on ≥ 3 real packages.
+- That AST mutators cover all real-world bug shapes. They don't — they
+  cover boundary, comparison, boolean, return-value, and arithmetic
+  bugs. Logic-level errors that span multiple lines are out of scope.
+- That the split-seed fan is sound. With more seeds the search yields
+  more decidable splits, but we don't yet quantify how seed count
+  affects task quality. v4 should publish that curve.
 
 ## Path to becoming research- or product-worthy
 

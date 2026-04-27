@@ -79,6 +79,11 @@ class TaskSpec:
     expected_behavior: str = ""
     difficulty: dict[str, Any] = field(default_factory=dict)
     reward_config: dict[str, float] = field(default_factory=dict)
+    # v3 ingestion: when present, the runner replaces the listed public-test
+    # files with these contents after copying the fixture but before applying
+    # the mutation. Lets ingested tasks ship a public/hidden test split
+    # without mutating the original fixture on disk.
+    public_test_overrides: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

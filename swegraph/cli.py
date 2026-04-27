@@ -47,8 +47,27 @@ def _git(workspace: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _apply_mutation(task, api: ActionAPI) -> None:
+    """Apply the task's mutation to the workspace.
+
+    When ``mutation_metadata`` carries explicit ``line`` and ``col`` (as the
+    v3 ingest pipeline emits), apply the substitution precisely. Without
+    those fields we fall back to the global ``str.replace`` form that v1/v2
+    hand-authored tasks expect.
+    """
+    from swegraph.ingest.mutators import replace_at_line_col
+
     mm = task.mutation_metadata
-    if mm.get("type") == "replace_text":
+    if mm.get("type") != "replace_text":
+        return
+    if "line" in mm and "col" in mm:
+        replace_at_line_col(
+            api.workspace / mm["path"],
+            int(mm["line"]),
+            int(mm["col"]),
+            mm["old"],
+            mm["new"],
+        )
+    else:
         api.replace_text(mm["path"], mm["old"], mm["new"])
 
 
@@ -274,6 +293,24 @@ def run_task(
             subprocess.run(cmd, cwd=sandbox.workspace, capture_output=True)
 
         api = ActionAPI(sandbox.workspace, sandbox.run)
+        # v3: ingested tasks may override the public-test files that ship in
+        # the fixture. Apply overrides BEFORE the mutation so the public set
+        # is the partition we declared at ingest time, not the full original
+        # suite.
+        if task.public_test_overrides:
+            # Wipe original tests so leftovers don't pollute the public
+            # surface, then write only the overrides we authored.
+            tests_dir = sandbox.workspace / "tests"
+            if tests_dir.exists():
+                for p in tests_dir.rglob("test_*.py"):
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            for rel, body in task.public_test_overrides.items():
+                target = sandbox.workspace / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(body, encoding="utf-8")
         _apply_mutation(task, api)
         baseline_snapshot = _snapshot(sandbox.workspace)
 
@@ -410,7 +447,8 @@ def cmd_eval(args):
 
 
 def cmd_batch(args):
-    tasks = sorted(Path(args.tasks).glob("task_*.json"))
+    tasks_dir = Path(args.tasks)
+    tasks = sorted(tasks_dir.glob("task_*.json")) + sorted(tasks_dir.glob("ingest_task_*.json"))
     out_root = Path(args.out)
     if out_root.exists() and args.clean:
         shutil.rmtree(out_root)
@@ -441,13 +479,43 @@ def cmd_batch_prm(args):
     """
     from swegraph.prm import emit_prm_pairs
 
-    tasks = sorted(Path(args.tasks).glob("task_*.json"))
+    tasks = sorted(Path(args.tasks).glob("task_*.json")) + sorted(Path(args.tasks).glob("ingest_task_*.json"))
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     baselines = [b.strip() for b in args.baselines.split(",") if b.strip()]
     if "oracle" not in baselines:
         baselines = ["oracle", *baselines]
     emit_prm_pairs(tasks=tasks, baselines=baselines, run_root=Path(args.runs_dir), out_path=out_path)
+
+
+def cmd_ingest(args):
+    """Procedurally ingest a real (or vendored-real) fixture into a set of
+    SWEGraph tasks via AST mutations + public/hidden test split. See
+    ``swegraph/ingest/task_factory.py``.
+    """
+    from swegraph.ingest import build_ingested_tasks
+    from swegraph.reward import load_reward_config
+
+    fixture_dir = FIXTURES / args.fixture
+    if not fixture_dir.exists():
+        # Allow absolute or workspace-relative paths too.
+        cand = Path(args.fixture)
+        if cand.exists():
+            fixture_dir = cand
+        else:
+            raise FileNotFoundError(f"fixture not found: {args.fixture}")
+    reward_cfg = load_reward_config(Path(args.reward_config)) if args.reward_config else None
+    paths = build_ingested_tasks(
+        fixture_dir=fixture_dir,
+        out_dir=Path(args.out),
+        seed=args.seed,
+        hidden_frac=args.hidden_frac,
+        max_tasks=args.max_tasks,
+        operators=[op.strip() for op in args.operators.split(",")] if args.operators else None,
+        timeout=args.timeout,
+        reward_config=reward_cfg,
+    )
+    print(f"emitted {len(paths)} ingested tasks under {args.out}")
 
 
 def main():
@@ -488,6 +556,17 @@ def main():
     bp.add_argument("--baselines", required=True, help="comma-separated baseline names; oracle always included")
     bp.add_argument("--out", required=True, help="output JSONL path for preference pairs")
     bp.set_defaults(func=cmd_batch_prm)
+
+    ig = sp.add_parser("ingest", help="generate tasks from a real-or-vendored fixture via AST mutators")
+    ig.add_argument("--fixture", required=True, help="fixture name under swegraph/fixtures/repos/ or absolute path")
+    ig.add_argument("--out", required=True, help="output dir for ingested task JSON")
+    ig.add_argument("--seed", type=int, default=7)
+    ig.add_argument("--hidden-frac", type=float, default=0.3, help="fraction of test functions held out as hidden")
+    ig.add_argument("--max-tasks", type=int, default=20)
+    ig.add_argument("--operators", default=None, help="comma-separated mutator names (default: all)")
+    ig.add_argument("--timeout", type=int, default=30)
+    ig.add_argument("--reward-config", default=None)
+    ig.set_defaults(func=cmd_ingest)
 
     args = p.parse_args()
     args.func(args)

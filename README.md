@@ -1,20 +1,61 @@
-# SWEGraph v2
+# SWEGraph v3
 
 SWEGraph is a local Python **environment / task factory** for software-engineering
-agents. v1 shipped multi-step trajectories, dense milestone rewards, and
-hidden tests on three toy fixtures. v2 closes the honest gaps that public
-critique surfaced and adds **one genuinely-novel difficulty axis**:
+agents.
 
-> **Causal-hop tasks** plant a single mutation in a leaf module and measure
-> the agent's ability to localise the fault through a controllable number of
-> static import edges. No prior public system uses static import-graph
-> distance as a generator-side difficulty knob.
+- **v1** — multi-step trajectories, dense milestone rewards, hidden tests on three toy fixtures.
+- **v2** — causal-hop import-graph difficulty axis (the headline novelty), Hypothesis property + auto-extracted metamorphic validators, AST-level reward-hacking guards, four adversarial baselines, a paired-preference PRM dataset emitter.
+- **v3 (this release)** — **real-repo ingestion**. An AST-based procedural mutator (`off_by_one`, `compare_swap`, `boolean_flip`, `return_value`, `binary_op`) walks every non-test module of a target repo, the existing test suite classifies each mutation, and a deterministic public/hidden test split turns every "killed" mutation with a public-misses split into a SWEGraph task. The v2 plan's biggest unmitigated risk — *toy fixtures don't generalise* — is now closed for the pipeline.
 
-Everything else in v2 is *engineering hardening*: stronger hidden validation
-(Hypothesis property + auto-extracted metamorphic relations), AST-level
-reward-hacking guards, four adversarial baselines, a paired-preference PRM
-dataset emitter, and richer trajectory logs. Honest framing — not headline
-novelty.
+> **v3 wedge:** the ingest pipeline accepts any pip-installable Python package (vendored locally for offline reproducibility on the new `reqparse_lite` fixture). Authentic mutations on real code, with the held-out fraction of the existing test suite as the hidden validator. No hand-authored hidden tests.
+
+## v3 quickstart: real-repo ingestion
+
+```bash
+python -m swegraph ingest --fixture reqparse_lite --out runs/ingested \
+    --max-tasks 12 --seed 7 --hidden-frac 0.3
+```
+
+What this does:
+
+1. Walks every non-test ``.py`` file under ``swegraph/fixtures/repos/reqparse_lite/`` and enumerates candidate AST mutations (~30+ per module).
+2. For each mutation, applies it in a scratch copy and runs the existing pytest suite. Classifies as `killed` / `survived` / `broke_syntax` / `baseline_red`.
+3. For each `killed` mutation, sweeps a small fan of split seeds to find a public/hidden test partition where the *public* split misses the mutation but the *hidden* split catches it. This is the "preferred" task shape — the agent has to infer the property hidden tests encode, not just stare at failing public tests.
+4. Emits a `TaskSpec` per surviving + decidable mutation, including a `public_test_overrides` payload that the runner installs into the workspace at run time so the fixture itself stays pristine.
+
+A typical run on `reqparse_lite` emits **12 tasks** from 14 killed mutations across `query.py` / `headers.py` / `payload.py`. The `swegraph ingest` CLI also writes an `ingest_manifest.json` with the full mutation-classification stats:
+
+```json
+{
+  "fixture": ".../reqparse_lite",
+  "stats": {
+    "tasks_emitted": 12,
+    "survived_skipped": 5,
+    "killed": 14,
+    "broke_syntax": 0,
+    "baseline_red": 0,
+    "no_decidable_split_found": 2
+  }
+}
+```
+
+Then run baselines on them exactly like any other task:
+
+```bash
+python -m swegraph batch --tasks runs/ingested --baseline oracle --out runs/oracle_ingested
+python -m swegraph batch --tasks runs/ingested --baseline do_nothing --out runs/donothing_ingested
+python -m swegraph batch --tasks runs/ingested --baseline naive --out runs/naive_ingested
+```
+
+Headline numbers on the `reqparse_lite` fixture (12 ingested tasks):
+
+| baseline | hidden pass | mean reward |
+| --- | --- | --- |
+| `oracle` | **12 / 12** | +4.31 |
+| `naive` | **0 / 12** | +1.10 |
+| `do_nothing` | **0 / 12** | +1.04 |
+
+Notable: `naive` collapses on real ingested tasks (its hand-coded heuristic regex doesn't match the AST mutations on real code) — exactly the difficulty gradient v2's naive baseline failed to provide.
 
 ## Honest delta vs prior art
 
@@ -46,6 +87,7 @@ Against this, SWEGraph v2 ships:
 | Paired-state PRM preference dataset (oracle vs counterfactual at same seed) | close to novel | DPO-shape pairs at identical state hashes for SWE; no public dataset of this form |
 | Multi-correct-patch acceptance via property satisfaction | useful | addresses single-oracle limitation Meta SWE-RL flagged |
 | Trajectory format: gzip+b64 stdout/stderr, per-test pass/fail map, milestone deltas | polish | needed to train PRMs; not a contribution by itself |
+| **Real-repo ingestion via AST mutators + public/hidden test split** | **modest novelty** | combines "killed-mutation = bug seed" with "deterministic split ⇒ public surface", and crucially auto-finds split seeds where public *misses* the mutation. SWE-smith uses generation; SWE-Gym uses real PRs; nobody (publicly) ships a single-pass mutate-and-split task factory operating on arbitrary real Python packages. |
 
 ## Architecture
 
@@ -58,7 +100,8 @@ swegraph/
     feature_addition.py        # optional kwarg in todo_cli
     causal_hop.py              # NEW: 3-module import-chain mutations
   fixtures/repos/
-    stats_utils/  csv_tool/  todo_cli/  multi_pkg/   # NEW: a -> b -> c
+    stats_utils/  csv_tool/  todo_cli/  multi_pkg/   # v2: a -> b -> c
+    reqparse_lite/                                    # v3: realistic ~250 LOC ingest target
   validators/                  # NEW: HiddenValidator abstraction
     unit_test.py               #   wraps v1 hidden_tests dict
     property.py                #   Hypothesis-driven; assertion expression
@@ -83,8 +126,13 @@ swegraph/
   evaluator.py                 # validators + guard report + causal-hop metadata
   tests_runner.py              # pytest counts + per-test status parser
   trajectory.py                # JSONL logger (now full stdout/stderr + deltas)
-  prm.py                       # NEW: paired-preference PRM dataset emitter
-  cli.py                       # generate / run / eval / batch / batch-prm
+  prm.py                       # v2: paired-preference PRM dataset emitter
+  ingest/                      # v3: real-repo ingestion pipeline
+    mutators.py                #   AST mutation operators
+    survival.py                #   apply-and-classify (killed/survived/etc.)
+    test_split.py              #   deterministic public/hidden function split
+    task_factory.py            #   end-to-end pipeline -> TaskSpec list
+  cli.py                       # generate / run / eval / batch / batch-prm / ingest
 configs/
   reward_default.yaml
 docs/
@@ -263,15 +311,13 @@ counterfactual baselines, with a healthy mix of
 See `docs/acceptance.md` for the exact reproducer and `docs/research-notes.md`
 for the design rationale + critical reception that drove v2.
 
-## Out of scope (v3 hooks)
+## Out of scope (v4 hooks)
 
-- Real-repo ingestion via mutmut on small Python packages (planned).
-- Docker-per-task sandbox (replaces `LocalSandbox`).
-- LLM agent adapter (drop-in for any model that consumes the user prompt +
-  public tests + `ActionAPI`).
-- Cross-language: a Rust or TS task family using `proptest` / `fast-check`.
-- Trained PRM artifact (the dataset is shipped; the trained model is not).
-- Calibrated decontamination metric (mutual information between hidden spec
-  and public-test surface).
-- Patch-DAG (multi-correct-patch equivalence-class clustering) — multi-month
-  research.
+- **Empirical hop-count vs success curve** — the causal-hop axis ships, but no LLM has been run against it yet. Hooked to the LLM adapter.
+- **LLM agent adapter** (drop-in tool-use loop consuming only `user_prompt + public_tests + ActionAPI`).
+- **Docker-per-task sandbox** (replaces `LocalSandbox`).
+- **Real-PyPI ingestion** — the v3 ingest pipeline is repo-agnostic but has only been demoed on the vendored `reqparse_lite` fixture. v4 should add a `--pypi <package>` option that pip-installs into a temp venv and runs the same pipeline.
+- **Cross-language**: a Rust or TS task family using `proptest` / `fast-check`.
+- **Trained PRM artifact** (the dataset is shipped; the trained model is not).
+- **Calibrated decontamination metric** (mutual information between hidden spec and public-test surface).
+- **Patch-DAG** (multi-correct-patch equivalence-class clustering) — multi-month research.
