@@ -4,10 +4,26 @@ from swegraph.schema import TaskSpec
 from swegraph.utils.prompts import generate_prompts
 
 
-def generate_config_bug_task(task_id: str, seed: int, reward_config: dict[str, float]) -> TaskSpec:
+_HIDDEN = '''from csv_tool.core import parse_csv
+
+
+def test_parse_csv_default_delimiter_still_works():
+    rows = parse_csv("a,b\\n1,2\\n")
+    assert rows == [{"a": "1", "b": "2"}]
+
+
+def test_parse_csv_delimiter_key_still_works():
+    cfg = {"delimiter": ";"}
+    rows = parse_csv("a;b\\n1;2\\n", config=cfg)
+    assert rows == [{"a": "1", "b": "2"}]
+'''
+
+
+def generate_config_bug_task(
+    task_id: str, seed: int, reward_config: dict[str, float]
+) -> TaskSpec:
     repo_id = "csv_tool"
     formal, user, hidden = generate_prompts(repo_id, "config_bug", "CSV delimiter", seed=seed)
-    hidden_test = """from csv_tool.core import parse_csv\n\n\ndef test_parse_csv_default_delimiter_still_works():\n    rows = parse_csv(\"a,b\\n1,2\\n\")\n    assert rows == [{\"a\": \"1\", \"b\": \"2\"}]\n\n\ndef test_parse_csv_delimiter_key_still_works():\n    cfg = {\"delimiter\": \";\"}\n    rows = parse_csv(\"a;b\\n1;2\\n\", config=cfg)\n    assert rows == [{\"a\": \"1\", \"b\": \"2\"}]\n"""
     return TaskSpec(
         task_id=task_id,
         repo_id=repo_id,
@@ -17,13 +33,16 @@ def generate_config_bug_task(task_id: str, seed: int, reward_config: dict[str, f
         formal_prompt=formal,
         hidden_formal_spec=hidden,
         public_tests=["tests/test_public_config.py"],
-        hidden_tests={"tests/test_hidden_config.py": hidden_test},
+        hidden_validators=[
+            {"kind": "unit_tests", "files": {"tests/test_hidden_config.py": _HIDDEN}},
+        ],
         mutation_metadata={
             "type": "replace_text",
             "path": "csv_tool/core.py",
             "old": "delimiter = (config or {}).get(\"delimiter\", \",\")",
             "new": "delimiter = (config or {}).get(\"delim\", \",\")",
             "relevant_files": ["csv_tool/core.py"],
+            "root_cause_file": "csv_tool/core.py",
         },
         oracle_metadata={"patch_type": "reverse_mutation"},
         allowed_files=["csv_tool/core.py", "tests/test_public_config.py"],

@@ -34,7 +34,7 @@ def test_do_nothing_fails_hidden(tmp_path: Path):
 
 
 def test_naive_solves_bug_injection_only(tmp_path: Path):
-    tasks = generate_tasks(3, tmp_path / "tasks", seed=11)
+    tasks = generate_tasks(4, tmp_path / "tasks", seed=11)
     by_family: dict[str, dict] = {}
     for t in tasks:
         out = tmp_path / "runs" / f"naive_{t.stem}"
@@ -45,6 +45,7 @@ def test_naive_solves_bug_injection_only(tmp_path: Path):
     assert by_family["bug_injection"]["hidden_tests_pass"], "naive must solve simple boundary bug"
     assert not by_family["config_bug"]["hidden_tests_pass"], "naive must not solve config rename"
     assert not by_family["feature_addition"]["hidden_tests_pass"], "naive must not solve feature add"
+    assert not by_family["causal_hop"]["hidden_tests_pass"], "naive must not solve multi-file causal-hop"
 
 
 def test_trajectory_is_multi_step_for_oracle(tmp_path: Path):

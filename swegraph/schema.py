@@ -27,6 +27,10 @@ class MilestoneState:
     protected_files_unchanged: bool = True
     no_test_deletion: bool = True
     final_submitted: bool = False
+    # v2: localization milestone for causal-hop tasks. True when the agent
+    # reads the *root cause* file before its first write. Always-True default
+    # so non-causal-hop tasks (where root_cause_file is unset) never fail it.
+    localization_correct: bool = True
 
 
 @dataclass
@@ -44,6 +48,11 @@ class TrajectoryStep:
     milestone_state: dict[str, Any] = field(default_factory=dict)
     reward_components: dict[str, float] = field(default_factory=dict)
     cumulative_reward: float = 0.0
+    # v2 additions:
+    stdout_full_b64: str | None = None
+    stderr_full_b64: str | None = None
+    per_test_status: dict[str, str] = field(default_factory=dict)
+    milestone_delta: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -58,7 +67,11 @@ class TaskSpec:
     formal_prompt: str = ""
     hidden_formal_spec: str = ""
     public_tests: list[str] = field(default_factory=list)
+    # v1 hidden_tests (filename -> body) is kept for back-compat. The runner
+    # promotes it to a single ``unit_tests`` validator if hidden_validators is
+    # empty.
     hidden_tests: dict[str, str] = field(default_factory=dict)
+    hidden_validators: list[dict[str, Any]] = field(default_factory=list)
     mutation_metadata: dict[str, Any] = field(default_factory=dict)
     oracle_metadata: dict[str, Any] = field(default_factory=dict)
     allowed_files: list[str] = field(default_factory=list)
@@ -69,6 +82,16 @@ class TaskSpec:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class GuardReportEntry:
+    """Single reward-hacking-guard hit logged for verifier-training labels."""
+
+    rule: str
+    severity: str  # "warn" | "block"
+    file: str | None = None
+    detail: str = ""
 
 
 @dataclass
@@ -87,6 +110,10 @@ class FinalReport:
     reward_total: float
     milestone_completion: dict[str, Any]
     trajectory_length: int
+    # v2 additions
+    validator_results: list[dict[str, Any]] = field(default_factory=list)
+    guard_report: list[dict[str, Any]] = field(default_factory=list)
+    causal_hop_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

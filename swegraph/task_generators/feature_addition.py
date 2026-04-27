@@ -4,10 +4,25 @@ from swegraph.schema import TaskSpec
 from swegraph.utils.prompts import generate_prompts
 
 
-def generate_feature_addition_task(task_id: str, seed: int, reward_config: dict[str, float]) -> TaskSpec:
+_HIDDEN = '''from todo_cli.core import list_tasks
+
+
+def test_list_tasks_backwards_compatible():
+    tasks = [{"title": "x", "done": False}, {"title": "y", "done": True}]
+    assert len(list_tasks(tasks)) == 2
+
+
+def test_list_tasks_done_filter():
+    tasks = [{"title": "x", "done": False}, {"title": "y", "done": True}]
+    assert list_tasks(tasks, done=True) == [{"title": "y", "done": True}]
+'''
+
+
+def generate_feature_addition_task(
+    task_id: str, seed: int, reward_config: dict[str, float]
+) -> TaskSpec:
     repo_id = "todo_cli"
     formal, user, hidden = generate_prompts(repo_id, "feature_addition", "--done flag", seed=seed)
-    hidden_test = """from todo_cli.core import list_tasks\n\n\ndef test_list_tasks_backwards_compatible():\n    tasks = [{\"title\": \"x\", \"done\": False}, {\"title\": \"y\", \"done\": True}]\n    assert len(list_tasks(tasks)) == 2\n\n\ndef test_list_tasks_done_filter():\n    tasks = [{\"title\": \"x\", \"done\": False}, {\"title\": \"y\", \"done\": True}]\n    assert list_tasks(tasks, done=True) == [{\"title\": \"y\", \"done\": True}]\n"""
     return TaskSpec(
         task_id=task_id,
         repo_id=repo_id,
@@ -17,12 +32,15 @@ def generate_feature_addition_task(task_id: str, seed: int, reward_config: dict[
         formal_prompt=formal,
         hidden_formal_spec=hidden,
         public_tests=["tests/test_public_feature.py"],
-        hidden_tests={"tests/test_hidden_feature.py": hidden_test},
+        hidden_validators=[
+            {"kind": "unit_tests", "files": {"tests/test_hidden_feature.py": _HIDDEN}},
+        ],
         mutation_metadata={
             "type": "feature",
             "path": "todo_cli/core.py",
             "hint": "update list_tasks signature to accept done: bool | None = None",
             "relevant_files": ["todo_cli/core.py"],
+            "root_cause_file": "todo_cli/core.py",
         },
         oracle_metadata={
             "patch_type": "replace_text",

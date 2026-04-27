@@ -8,12 +8,18 @@ from swegraph.reward import DEFAULT_REWARD
 from swegraph.schema import TaskSpec
 from swegraph.task_generators import (
     generate_bug_injection_task,
+    generate_causal_hop_task,
     generate_config_bug_task,
     generate_feature_addition_task,
 )
 
 
-GENERATORS = [generate_bug_injection_task, generate_config_bug_task, generate_feature_addition_task]
+GENERATORS = [
+    generate_bug_injection_task,
+    generate_config_bug_task,
+    generate_feature_addition_task,
+    generate_causal_hop_task,
+]
 
 
 def save_task(task: TaskSpec, out_path: Path) -> None:
@@ -23,7 +29,11 @@ def save_task(task: TaskSpec, out_path: Path) -> None:
 
 def load_task(path: Path) -> TaskSpec:
     data = json.loads(path.read_text(encoding="utf-8"))
-    return TaskSpec(**data)
+    # v1 -> v2 back-compat: drop fields the v2 dataclass does not know about
+    # (rather than raise) and ensure required v2 fields default cleanly.
+    allowed = TaskSpec.__dataclass_fields__.keys()
+    filtered = {k: v for k, v in data.items() if k in allowed}
+    return TaskSpec(**filtered)
 
 
 def generate_tasks(
