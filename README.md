@@ -1,13 +1,14 @@
-# SWEGraph v3
+# SWEGraph v4
 
 SWEGraph is a local Python **environment / task factory** for software-engineering
 agents.
 
 - **v1** — multi-step trajectories, dense milestone rewards, hidden tests on three toy fixtures.
 - **v2** — causal-hop import-graph difficulty axis (the headline novelty), Hypothesis property + auto-extracted metamorphic validators, AST-level reward-hacking guards, four adversarial baselines, a paired-preference PRM dataset emitter.
-- **v3 (this release)** — **real-repo ingestion**. An AST-based procedural mutator (`off_by_one`, `compare_swap`, `boolean_flip`, `return_value`, `binary_op`) walks every non-test module of a target repo, the existing test suite classifies each mutation, and a deterministic public/hidden test split turns every "killed" mutation with a public-misses split into a SWEGraph task. The v2 plan's biggest unmitigated risk — *toy fixtures don't generalise* — is now closed for the pipeline.
+- **v3** — real-repo ingestion. AST mutator (`off_by_one`, `compare_swap`, `boolean_flip`, `return_value`, `binary_op`) + public/hidden test split coupling. The v2 plan's "toy fixtures don't generalise" risk is closed for the pipeline.
+- **v4 (this release)** — **LLM agent adapter**. Two new baselines (`llm`, `llm_mock`) wire the harness to the official Anthropic SDK with `claude-opus-4-7`, adaptive thinking, prompt caching, and a manual tool-use loop that yields one `Action` per tool call into the existing trajectory logger. Unblocks the empirical hop-count vs success curve the v2 plan called out as missing. See [`docs/llm-adapter.md`](docs/llm-adapter.md) for the full design and the empirical-curve recipe.
 
-> **v3 wedge:** the ingest pipeline accepts any pip-installable Python package (vendored locally for offline reproducibility on the new `reqparse_lite` fixture). Authentic mutations on real code, with the held-out fraction of the existing test suite as the hidden validator. No hand-authored hidden tests.
+> **v4 wedge:** none. The adapter is table-stakes infrastructure — every SWE-bench-style harness ships one. The reason it matters here is that v2 introduced the causal-hop axis but didn't have an agent to run it against; v4 closes that loop. Honest framing maintained.
 
 ## v3 quickstart: real-repo ingestion
 
@@ -115,11 +116,13 @@ swegraph/
     prompts.py
   baselines/
     do_nothing.py / oracle_patch.py / naive_search_replace.py
-    adversarial/               # NEW: 4 attackers as labelled negatives
+    adversarial/               # v2: 4 attackers as labelled negatives
       test_content_edit.py     #   gut public-test asserts
       conftest_shadow.py       #   drop subdir conftest
       fixture_monkeypatch.py   #   inject mock import
       public_test_overfit.py   #   hardcode lookup table for visible inputs
+    llm_adapter.py             # v4: real Anthropic SDK loop (`llm` baseline)
+    llm_mock.py                # v4: scripted-responder mock (`llm_mock`)
   sandbox.py                   # LocalSandbox (Docker is a v3 hook)
   actions.py                   # ActionAPI tool surface
   reward.py                    # RewardTracker + YAML/JSON loader
@@ -311,13 +314,13 @@ counterfactual baselines, with a healthy mix of
 See `docs/acceptance.md` for the exact reproducer and `docs/research-notes.md`
 for the design rationale + critical reception that drove v2.
 
-## Out of scope (v4 hooks)
+## Out of scope (v5+ hooks)
 
-- **Empirical hop-count vs success curve** — the causal-hop axis ships, but no LLM has been run against it yet. Hooked to the LLM adapter.
-- **LLM agent adapter** (drop-in tool-use loop consuming only `user_prompt + public_tests + ActionAPI`).
+- **Empirical hop-count vs success curve numbers** — the recipe ships in `docs/llm-adapter.md`; running it requires API credits + time.
+- **Real-PyPI ingestion** — the v3 ingest pipeline is repo-agnostic but has only been demoed on the vendored `reqparse_lite` fixture. v5 should add a `--pypi <package>` option that pip-installs into a temp venv and runs the same pipeline.
 - **Docker-per-task sandbox** (replaces `LocalSandbox`).
-- **Real-PyPI ingestion** — the v3 ingest pipeline is repo-agnostic but has only been demoed on the vendored `reqparse_lite` fixture. v4 should add a `--pypi <package>` option that pip-installs into a temp venv and runs the same pipeline.
 - **Cross-language**: a Rust or TS task family using `proptest` / `fast-check`.
-- **Trained PRM artifact** (the dataset is shipped; the trained model is not).
+- **Trained PRM artifact** (the v2 dataset is shipped; the trained model is not).
+- **Multi-vendor agent adapters** — the v4 `llm` baseline is Claude/Anthropic only. An OpenAI / OpenHands / SWE-agent adapter is a clean follow-on; the `responder` hook in `run_llm_loop` already accepts arbitrary callables.
 - **Calibrated decontamination metric** (mutual information between hidden spec and public-test surface).
 - **Patch-DAG** (multi-correct-patch equivalence-class clustering) — multi-month research.
