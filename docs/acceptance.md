@@ -1,3 +1,60 @@
+# SWEGraph v3 acceptance evidence
+
+## v3 — real-repo ingestion via AST mutators
+
+```bash
+python -m pip install pytest pyyaml hypothesis
+python -m pytest -q                                              # 43 / 43
+rm -rf runs
+python -m swegraph ingest --fixture reqparse_lite \
+    --out runs/ingested --max-tasks 12 --seed 7 --hidden-frac 0.3
+for b in oracle do_nothing naive; do
+    python -m swegraph batch --tasks runs/ingested --baseline $b \
+        --out runs/${b}_ingested --clean
+done
+```
+
+Test suite:
+
+```
+$ python -m pytest -q
+...........................................                              [100%]
+43 passed
+```
+
+v3 added 13 new tests (`test_ingest_mutators.py` + `test_ingest_pipeline.py`) covering:
+- All five AST mutation operators emit the expected before/after pairs.
+- `replace_at_line_col` round-trips precise edits without affecting other occurrences.
+- `enumerate_mutations` skips non-Python files.
+- `split_tests` is deterministic for `(seed, fixture)` and produces a non-empty split on `reqparse_lite`.
+- `classify_mutation` correctly classifies a known catchable bug (the v2 stats_utils off-by-one) as `killed`.
+- `build_ingested_tasks(reqparse_lite, max_tasks=4)` emits ≥ 2 decidable tasks with the expected schema.
+- Oracle solves every emitted ingested task (hidden tests pass).
+- `do_nothing` fails every emitted ingested task.
+
+Ingest pipeline numbers on the vendored `reqparse_lite` fixture (~250 LOC across 3 modules + 42 public tests):
+
+| stat | count |
+| --- | ---: |
+| tasks emitted | **12** |
+| killed (full suite catches mutation) | 14 |
+| survived skipped (equivalent / untested code path) | 5 |
+| broke_syntax | 0 |
+| baseline_red | 0 |
+| no decidable split found | 2 |
+
+Headline baseline numbers on the **12 ingested tasks**:
+
+| baseline | hidden pass | mean reward | comment |
+| --- | --- | --- | --- |
+| `oracle` | **12 / 12** | +4.31 | precise (line, col) reverse-mutation |
+| `do_nothing` | 0 / 12 | +1.04 | lower bound |
+| `naive` | **0 / 12** | +1.04 | heuristic regex collapses on real-repo mutations |
+
+The `naive` baseline solving exactly 0/12 ingested tasks is the v3 difficulty-gradient proof: v1/v2 hand-coded heuristics could solve simple boundary bugs in toy fixtures (8/32 hidden on the v2 task suite), but they collapse entirely once the bug is a procedural AST mutation in code the heuristics weren't designed against. This is the *real* difficulty signal v1's planning agent demanded.
+
+---
+
 # SWEGraph v2 acceptance evidence
 
 Reproduce locally:

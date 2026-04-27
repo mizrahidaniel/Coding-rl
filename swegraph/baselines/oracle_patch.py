@@ -35,7 +35,21 @@ def run_oracle_patch(api, task) -> Iterator:
     patch_type = om.get("patch_type")
     if patch_type == "reverse_mutation":
         mm = task.mutation_metadata
-        ok = api.replace_text(mm["path"], mm["new"], mm["old"])
+        # Use precise (line, col) replacement when the ingest pipeline
+        # provided it, so reverse-mutation doesn't accidentally replace
+        # other occurrences of short tokens like ``and`` / ``+`` / ``-``.
+        if "line" in mm and "col" in mm:
+            from swegraph.ingest.mutators import replace_at_line_col
+
+            ok = replace_at_line_col(
+                api.workspace / mm["path"],
+                int(mm["line"]),
+                int(mm["col"]),
+                mm["new"],
+                mm["old"],
+            )
+        else:
+            ok = api.replace_text(mm["path"], mm["new"], mm["old"])
         yield Action(
             "replace_text",
             {"path": mm["path"], "matched": ok},
