@@ -6,7 +6,7 @@ from swegraph.utils.prompts import generate_prompts
 
 def generate_config_bug_task(task_id: str, seed: int, reward_config: dict[str, float]) -> TaskSpec:
     repo_id = "csv_tool"
-    formal, user, hidden = generate_prompts(repo_id, "config_bug", "CSV delimiter")
+    formal, user, hidden = generate_prompts(repo_id, "config_bug", "CSV delimiter", seed=seed)
     hidden_test = """from csv_tool.core import parse_csv\n\n\ndef test_parse_csv_default_delimiter_still_works():\n    rows = parse_csv(\"a,b\\n1,2\\n\")\n    assert rows == [{\"a\": \"1\", \"b\": \"2\"}]\n\n\ndef test_parse_csv_delimiter_key_still_works():\n    cfg = {\"delimiter\": \";\"}\n    rows = parse_csv(\"a;b\\n1;2\\n\", config=cfg)\n    assert rows == [{\"a\": \"1\", \"b\": \"2\"}]\n"""
     return TaskSpec(
         task_id=task_id,

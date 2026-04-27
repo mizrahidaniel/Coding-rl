@@ -26,7 +26,12 @@ def load_task(path: Path) -> TaskSpec:
     return TaskSpec(**data)
 
 
-def generate_tasks(num_tasks: int, out_dir: Path, seed: int = 7, reward_config: dict | None = None) -> list[Path]:
+def generate_tasks(
+    num_tasks: int,
+    out_dir: Path,
+    seed: int = 7,
+    reward_config: dict | None = None,
+) -> list[Path]:
     rng = random.Random(seed)
     reward = {**DEFAULT_REWARD, **(reward_config or {})}
     out: list[Path] = []
