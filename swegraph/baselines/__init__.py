@@ -24,6 +24,7 @@ class Action:
 BaselineFn = Callable[["ActionAPI", TaskSpec], Iterable[Action]]  # noqa: F821
 
 # Registered after class definition to avoid circular imports.
+from swegraph.baselines.adversarial import ADVERSARIAL_BASELINES  # noqa: E402
 from swegraph.baselines.do_nothing import run_do_nothing  # noqa: E402
 from swegraph.baselines.naive_search_replace import run_naive_search_replace  # noqa: E402
 from swegraph.baselines.oracle_patch import run_oracle_patch  # noqa: E402
@@ -32,4 +33,5 @@ BASELINES: dict[str, BaselineFn] = {
     "do_nothing": run_do_nothing,
     "oracle": run_oracle_patch,
     "naive": run_naive_search_replace,
+    **ADVERSARIAL_BASELINES,
 }

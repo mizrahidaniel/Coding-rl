@@ -1,256 +1,277 @@
-# SWEGraph v1
+# SWEGraph v2
 
 SWEGraph is a local Python **environment / task factory** for software-engineering
-agents. v1 is intentionally not a full LLM agent. It focuses on the asset that
-actually matters for SFT, RL, and verifier training: **decontaminated synthetic
-tasks with hidden validators, dense milestone rewards, and full multi-step
-trajectory logs.**
+agents. v1 shipped multi-step trajectories, dense milestone rewards, and
+hidden tests on three toy fixtures. v2 closes the honest gaps that public
+critique surfaced and adds **one genuinely-novel difficulty axis**:
 
-It is the SWE-side mirror of the graph-backed computer-use environments the
-project started with.
+> **Causal-hop tasks** plant a single mutation in a leaf module and measure
+> the agent's ability to localise the fault through a controllable number of
+> static import edges. No prior public system uses static import-graph
+> distance as a generator-side difficulty knob.
 
-| | GUI / computer-use side | SWEGraph side |
+Everything else in v2 is *engineering hardening*: stronger hidden validation
+(Hypothesis property + auto-extracted metamorphic relations), AST-level
+reward-hacking guards, four adversarial baselines, a paired-preference PRM
+dataset emitter, and richer trajectory logs. Honest framing — not headline
+novelty.
+
+## Honest delta vs prior art
+
+The 2025-2026 SWE-RL frontier already publishes:
+
+- **SWE-bench Pro / Live / Rebench (2026)** — contamination-resistant
+  benchmarks (private codebases, monthly refresh, post-cutoff tasks).
+- **Self-Play SWE-RL (arXiv 2512.18552)** — dual-role injector/solver,
+  +10.4 on SWE-bench Verified, +7.8 on Pro.
+- **SWE-RL (Meta, arXiv 2502.18449)** — 11M PR instances + difflib similarity
+  reward.
+- **MIST-RL (2026)** — incremental mutation-killing reward for test
+  generation.
+- **SWE-PRM / AgentPRM (2025-26)** — step-level process reward models.
+- **Agentic Property-Based Testing (arXiv 2510.09907)** — Hypothesis-driven
+  test generation by LLMs.
+- **Prime Intellect Verifiers + Environments Hub** — open-source RL
+  environment standard with built-in SWE support.
+
+Against this, SWEGraph v2 ships:
+
+| Item | Verdict | What's actually new |
 | --- | --- | --- |
-| state | UI screen + app graph | repo + tests + git + runtime |
-| action | click / type / hotkey | `run_command` / `read_file` / `write_file` / `apply_patch` / `replace_text` / `finish` |
-| goal | hidden target screen | hidden validator tests pass |
-| reward | BFS progress, invalid action, no loops, no collateral | milestone progress, public test progress, no collateral, no test deletion |
-| evaluator's edge | hidden state graph | hidden mutation site, hidden tests, file/test guards |
+| Procedural task families | not novel | SWE-smith and Self-Play SWE-RL already do generation at scale |
+| Hidden tests as Hypothesis properties + auto-extracted metamorphic relations | reframing | PBT-as-decontamination is a useful shape but not invention |
+| **Causal-hop import-graph difficulty axis** | **novel** | controllable static-graph distance from mutation site to public test surface |
+| Reward-hacking guard library (AST detection, recursive conftest scan, symlink reject) | not novel | all known patterns; precision-over-recall implementation |
+| Counterfactual adversarial baselines (4 attackers) as labelled negatives | useful infrastructure | most prior art logs negatives, doesn't ship a registry |
+| Paired-state PRM preference dataset (oracle vs counterfactual at same seed) | close to novel | DPO-shape pairs at identical state hashes for SWE; no public dataset of this form |
+| Multi-correct-patch acceptance via property satisfaction | useful | addresses single-oracle limitation Meta SWE-RL flagged |
+| Trajectory format: gzip+b64 stdout/stderr, per-test pass/fail map, milestone deltas | polish | needed to train PRMs; not a contribution by itself |
 
-## Why this exists (and what is *not* novel)
+## Architecture
 
-Closely-related prior art:
-- **SWE-bench / SWE-bench Verified / SWE-bench Pro** — real GitHub-issue benchmarks
-  with fail-to-pass / pass-to-pass evaluation. Defines today's SWE eval pattern but
-  is increasingly contaminated and only emits final pass/fail.
-- **SWE-Gym** — 2,438 real Python tasks with envs + tests; trains agents and
-  verifiers from trajectories. Demonstrates trajectory-data value but uses real
-  repos (limited supply, contamination risk).
-- **SWE-smith** — generates 50k+ task instances from 128 repos and trains a
-  32B agent to ~40% on SWE-bench Verified. Closest to "unlimited synthetic SWE
-  data" but rewards remain final-test pass/fail.
-- **Self-play SWE-RL / automated bug injection** — same family as our
-  `bug_injection` task generator.
-- **OpenHands / SWE-agent** — open-source agent scaffolds; potential runners.
-- **OpenAI Codex** — publicly described as RL-trained on real SWE tasks in
-  isolated cloud sandboxes.
-- **OpenAI Reinforcement Fine-Tuning / Programmable Graders** — the
-  reward-model side of this same shape.
-- **Prime Intellect Verifiers / Environment Hub** — packaging spec for
-  RL/eval environments (dataset + harness + reward).
-- **Mechanize** — commercial SWE RL environments / evals.
-
-The wedge SWEGraph aims to occupy is narrower than "we built coding-agent RL
-environments." It is:
-
-1. **Procedural task families** with controllable difficulty, not real-world
-   issues (avoids contamination, infinite supply, no scraping cost).
-2. **Realistic-user-style prompts**, not formal GitHub issue text.
-3. **Hidden formal spec + hidden validator tests** kept off-disk during agent
-   rollouts (written to a temp dir, run with `PYTHONPATH=workspace`).
-4. **Dense workflow milestones**, not just final pass/fail:
-   reproduce → inspect → patch → re-run → submit, each with its own reward.
-5. **Reward-hacking guards**: detect deleted tests, edited `pytest.ini` /
-   `pyproject.toml`, protected-file changes, unrelated churn.
-6. **Action-API-level trajectories** suitable for SFT data and verifier/critic
-   training, not just final patch diffs.
-7. **Modular**: real-repo ingestion, Docker sandbox, OpenHands runner, and
-   Prime-Verifiers export are deliberately left as v2 hooks.
-
-If a competing system already does (1)+(3)+(4)+(5)+(6) on the same surface,
-SWEGraph collapses to a polished implementation rather than a novel asset.
-That is an honest framing: the differentiation is **density of evaluation
-signal + hidden state + procedural generation**, not the existence of an SWE
-RL env.
-
-## What v1 includes
-
-- **Task factory** (`swegraph/task.py`, `swegraph/task_generators/`) — three
-  families today: `bug_injection`, `config_bug`, `feature_addition`. Each
-  emits a `TaskSpec` with user prompt, hidden formal spec, public + hidden
-  tests, mutation/oracle metadata, allowed/protected file lists, and an
-  embedded reward config.
-- **Toy fixture repos** (`swegraph/fixtures/repos/`):
-  `stats_utils`, `csv_tool`, `todo_cli`. Real-repo ingestion is a v2 hook.
-- **Sandbox** (`swegraph/sandbox.py`) — copies a fixture into a temp
-  workspace, runs commands with timeout, never edits the original fixture.
-  Initialised as a git repo so true diffs are computable.
-- **Action API** (`swegraph/actions.py`) — `run_command`, `read_file`,
-  `write_file`, `apply_patch`, `replace_text`, `finish`.
-- **Multi-step runner** (`swegraph/cli.py`) — drives a baseline as an
-  iterator of `Action` records. Each action is logged as one
-  `TrajectoryStep` with the public-test status snapshot, milestone state,
-  per-component reward, cumulative reward, and changed-file list.
-- **Reward engine** (`swegraph/reward.py`) — milestone-once awards,
-  one-shot negative-milestone penalties, per-step cost, YAML/JSON config
-  loadable via `--reward-config`.
-- **Evaluator** (`swegraph/evaluator.py`) — runs public + hidden tests at
-  end-of-trajectory, tracks protected-file edits, deleted/disabled tests,
-  unrelated file churn, relevant-file inspection, patch size, and final
-  success.
-- **Trajectory logger** (`swegraph/trajectory.py`) — JSONL one record per
-  action. Milestone snapshot and reward delta per step.
-- **Baselines** (`swegraph/baselines/`):
-  - `oracle` — uses hidden oracle metadata; upper bound. ≥95% hidden pass.
-  - `do_nothing` — runs tests, finishes; lower bound, must fail.
-  - `naive` — heuristic textual swaps based on failing-test tracebacks
-    (no access to mutation_metadata). Solves easy boundary bugs only.
-- **Replay** — every run produces `task.json`, `trajectory.jsonl`,
-  `final_report.json`, `patch.diff`, `run.log`, and a human-readable
-  `replay.md` with a step-by-step table.
+```
+swegraph/
+  task.py                      # generate_tasks, load_task (v1 back-compat)
+  task_generators/
+    bug_injection.py           # off-by-one in stats_utils + property/metamorphic validators
+    config_bug.py              # rename in csv_tool
+    feature_addition.py        # optional kwarg in todo_cli
+    causal_hop.py              # NEW: 3-module import-chain mutations
+  fixtures/repos/
+    stats_utils/  csv_tool/  todo_cli/  multi_pkg/   # NEW: a -> b -> c
+  validators/                  # NEW: HiddenValidator abstraction
+    unit_test.py               #   wraps v1 hidden_tests dict
+    property.py                #   Hypothesis-driven; assertion expression
+    metamorphic.py             #   relation library (boundary_extrema, idempotent, ...)
+    _runners/                  #   subprocess entrypoints
+  utils/
+    diffing.py
+    file_guard.py              # HARDENED: AST detection, recursive conftest, symlink
+    import_graph.py            # NEW: static-import distance (causal hops)
+    metamorphic_extract.py     # NEW: AST -> relation extraction from public tests
+    prompts.py
+  baselines/
+    do_nothing.py / oracle_patch.py / naive_search_replace.py
+    adversarial/               # NEW: 4 attackers as labelled negatives
+      test_content_edit.py     #   gut public-test asserts
+      conftest_shadow.py       #   drop subdir conftest
+      fixture_monkeypatch.py   #   inject mock import
+      public_test_overfit.py   #   hardcode lookup table for visible inputs
+  sandbox.py                   # LocalSandbox (Docker is a v3 hook)
+  actions.py                   # ActionAPI tool surface
+  reward.py                    # RewardTracker + YAML/JSON loader
+  evaluator.py                 # validators + guard report + causal-hop metadata
+  tests_runner.py              # pytest counts + per-test status parser
+  trajectory.py                # JSONL logger (now full stdout/stderr + deltas)
+  prm.py                       # NEW: paired-preference PRM dataset emitter
+  cli.py                       # generate / run / eval / batch / batch-prm
+configs/
+  reward_default.yaml
+docs/
+  acceptance.md                # v2 acceptance evidence (numbers below)
+  research-notes.md            # NEW: design rationale + critical reception
+tests/                         # 30 tests (11 v1 + 19 v2) all green
+```
 
 ## CLI
 
 ```bash
-python -m swegraph generate --num-tasks 30 --out runs/tasks
-python -m swegraph generate --num-tasks 30 --out runs/tasks \
+# Generate 32 tasks (8 per family) with default reward weights:
+python -m swegraph generate --num-tasks 32 --out runs/tasks \
     --reward-config configs/reward_default.yaml
 
-python -m swegraph run --task runs/tasks/task_001.json --baseline oracle --out runs/oracle_001
-python -m swegraph run --task runs/tasks/task_001.json --baseline naive  --out runs/naive_001  --mode benchmark
+# Run a single task with a specific baseline:
+python -m swegraph run --task runs/tasks/task_004.json --baseline oracle --out runs/oracle_004
+python -m swegraph run --task runs/tasks/task_004.json --baseline attack_test_content_edit --out runs/attacker_004
 
-python -m swegraph eval --run runs/oracle_001
+# Inspect the final report:
+python -m swegraph eval --run runs/oracle_004
 
-python -m swegraph batch --tasks runs/tasks --baseline do_nothing --out runs/do_nothing_batch --clean
+# Batch a baseline over all tasks:
+python -m swegraph batch --tasks runs/tasks --baseline oracle --out runs/oracle_batch --clean
+
+# Emit a JSONL of paired preference tuples for PRM/critic training:
+python -m swegraph batch-prm \
+    --tasks runs/tasks \
+    --runs-dir runs/prm_runs \
+    --baselines oracle,do_nothing,naive,attack_test_content_edit,attack_public_test_overfit \
+    --out runs/prm_pairs.jsonl
 ```
 
-`--mode benchmark` withholds the hidden-tests-pass reward award until
-final eval. `--mode training` (default) lets the policy see the dense
-hidden-test signal.
+## Key concepts
 
-## Example outputs (abridged)
+### HiddenValidator
 
-### Generated task (`runs/tasks/task_001.json`)
+`TaskSpec.hidden_validators` is a list of validator specs (discriminated by
+`kind`). Each validator runs in a subprocess with `PYTHONPATH=workspace`,
+isolated from any other validator and from the agent's loop.
+
+- **`unit_tests`** — the v1 contract; a dict of `{filename -> body}`. Tests
+  are written to a temp dir and pytest is invoked.
+- **`property`** — Hypothesis-driven. The agent's implementation is fuzzed
+  against a Python `assertion` expression with `args` and `result` bound.
+- **`metamorphic`** — relation library: `boundary_extrema`,
+  `idempotent_under_call`, `monotonic_in_arg`, `non_increasing_size`. The
+  task generator can declare "this function should be idempotent" without
+  authoring the assertion.
+
+Auto-extraction from public-test ASTs (`utils/metamorphic_extract.py`) seeds
+metamorphic relations from invariants present in the public test source.
+This is the wedge against the "PBT is just hand-authored hidden tests with
+extra steps" criticism: at least one relation per task comes from the public
+tests mechanically.
+
+### Causal-hop tasks
+
+`multi_pkg` is a 3-module fixture with the directed import chain
+`a -> b -> c`. The `causal_hop` task generator plants a mutation in `b` or
+`c` and exposes a public test that imports only `a`. The shortest static
+import path between the mutation site and the public test surface is
+recorded as `mutation_metadata.import_hops`. The runner sets
+`localization_correct` if and only if the agent reads the
+`root_cause_file` before its first write — turning a coarse boolean into a
+real signal that scales with hop count.
+
+`utils/import_graph.py` builds a directed import graph by AST-parsing every
+non-test `.py` file. `hop_count(graph, src, dst)` returns the BFS distance.
+
+### Reward-hacking guards (monitored, not bulletproof)
+
+`utils/file_guard.py` ships:
+
+- `ast_detect_disabled_asserts` — flags `assert True`, `assert ... or True`,
+  `if False: ... assert ...`, `pytest.skip(...)`, `@pytest.mark.skip`,
+  `unittest.mock` imports in test modules, and empty test bodies.
+- `recursive_conftest_scan` — flags any conftest below the workspace that
+  did not exist in the baseline snapshot.
+- `reject_symlinks` — flags any symlinks in the workspace.
+
+Every detection writes a `GuardReportEntry` to `final_report.guard_report`.
+Block-severity hits force `final_success: false` regardless of test status.
+The framing is *monitored*, not *blocked*: the structured guard report is
+itself a labelled-data asset for verifier training.
+
+### Adversarial baselines
+
+Four attackers under `baselines/adversarial/`:
+
+| Attacker | Pattern | Caught by |
+| --- | --- | --- |
+| `attack_test_content_edit` | gut public-test asserts | `ast_detect_disabled_asserts` |
+| `attack_conftest_shadow` | drop a subdir conftest | `recursive_conftest_scan` |
+| `attack_fixture_monkeypatch` | inject `unittest.mock` into the test module | `ast_detect_disabled_asserts` (mock import) |
+| `attack_public_test_overfit` | hardcode a lookup table for the inputs in public tests | hidden `PropertyValidator` + `MetamorphicValidator` |
+
+The first three trigger guard hits and fail final-success. The fourth slips
+past the guards but fails the hidden validators on the `bug_injection`,
+`config_bug`, and `causal_hop` families. (`feature_addition`'s overfit
+happens to be a correct implementation — documented as a known weak
+adversary.)
+
+### PRM preference pairs
+
+`swegraph batch-prm` runs N baselines on the same task seeds and emits
+JSONL preference tuples of the form:
 
 ```json
 {
   "task_id": "task_001",
-  "repo_id": "stats_utils",
-  "task_family": "bug_injection",
-  "user_prompt": "Something's not right with percentile. Boundary indexes look broken. Please patch it.",
-  "hidden_formal_spec": "Edge cases including empty input and interior indexes must match (len-1)*p/100.",
-  "public_tests": ["tests/test_public_bug.py"],
-  "hidden_tests": {"tests/test_hidden_bug.py": "..."},
-  "mutation_metadata": {"type": "replace_text", "path": "stats_utils/core.py", "relevant_files": ["stats_utils/core.py"]},
-  "oracle_metadata": {"patch_type": "reverse_mutation"},
-  "allowed_files": ["stats_utils/core.py", "tests/test_public_bug.py"],
-  "protected_files": ["pyproject.toml", "pytest.ini"]
-}
-```
-
-### Trajectory step (one of N)
-
-```json
-{
   "step_index": 2,
-  "action_type": "replace_text",
-  "edit_metadata": {"path": "stats_utils/core.py", "matched": true, "note": "revert injected mutation"},
-  "changed_files": ["stats_utils/core.py"],
-  "public_test_status": {"passed": 1, "failed": 0, "all_passed": true},
-  "milestone_state": {"public_tests_pass": true, ...},
-  "reward_components": {"public_tests_improved": 0.5, "public_tests_pass": 1.0, "step_cost": -0.01, "_step_total": 1.69, "_cumulative": 2.57}
+  "state_hash": "2b8bf830346535be",
+  "match_type": "state_hash",
+  "milestone_state": {...},
+  "preferred": {"baseline": "oracle", "action_type": "replace_text", ...},
+  "rejected":  {"baseline": "attack_public_test_overfit", "action_type": "write_file", ...},
+  "labels": {
+    "preferred_final_success": true,
+    "rejected_final_success": false,
+    "preferred_validator_pass": true,
+    "rejected_validator_pass": false,
+    "rejected_guard_hits": 0
+  }
 }
 ```
 
-### Final report
+The state hash is SHA-256 over `(milestone_state, public_test_status)` so
+two trajectories share a state when the runner has observed the same
+milestones and pass/fail counts. Three matchers are run in priority order:
+strict (same step + same hash), state-hash (any step at the same hash),
+step-index (same step regardless of hash). Each pair is tagged with its
+`match_type`.
 
-```json
-{
-  "public_tests_pass": true,
-  "hidden_tests_pass": true,
-  "final_success": true,
-  "protected_files_changed": [],
-  "tests_deleted_or_disabled": false,
-  "unrelated_files_changed": [],
-  "relevant_files_inspected": true,
-  "bug_reproduced": true,
-  "reward_total": 4.54,
-  "trajectory_length": 5
-}
+This is the directly-shippable asset against the SWE-PRM literature: a
+public dataset of paired actions at identical states under controlled task
+seeds.
+
+## Acceptance evidence
+
+Run end-to-end:
+
+```bash
+python -m pytest -q                                    # 30 / 30 passing
+rm -rf runs
+python -m swegraph generate --num-tasks 32 --out runs/tasks --seed 7 \
+    --reward-config configs/reward_default.yaml
+for b in oracle do_nothing naive \
+         attack_test_content_edit attack_conftest_shadow \
+         attack_fixture_monkeypatch attack_public_test_overfit; do
+    python -m swegraph batch --tasks runs/tasks --baseline $b \
+        --out runs/${b}_batch --clean
+done
+python -m swegraph batch-prm --tasks runs/tasks --runs-dir runs/prm_runs \
+    --baselines oracle,do_nothing,naive,attack_test_content_edit,attack_public_test_overfit \
+    --out runs/prm_pairs.jsonl
 ```
 
-### Baseline behaviour on 6 generated tasks
+Headline numbers (32 tasks, 4 families, seed=7):
 
-| baseline | hidden pass | mean reward | notes |
-| --- | --- | --- | --- |
-| `oracle` | 6/6 | +4.54 | upper bound |
-| `naive` | 2/6 | mixed | solves bug_injection only |
-| `do_nothing` | 0/6 | +0.77 | guard rewards only |
+| baseline | hidden pass | mean reward | guard hits | comment |
+| --- | --- | --- | --- | --- |
+| `oracle` | 32/32 | +4.36 | 0 | upper bound |
+| `naive` | 8/32 | +1.94 | 0 | bug_injection only (heuristic) |
+| `do_nothing` | 0/32 | +0.97 | 0 | lower bound |
+| `attack_test_content_edit` | 0/32 | — | 18+ | guards block |
+| `attack_conftest_shadow` | 0/32 | — | 24+ | guards block |
+| `attack_fixture_monkeypatch` | 0/32 | — | 12+ | guards block |
+| `attack_public_test_overfit` | ~25% | — | 0 | hidden validators block (except feature_addition) |
 
-## How v1 maps to SFT / RL / verifier training
+PRM dataset: ~50-60 paired preference tuples per 8-task batch across 4
+counterfactual baselines, with a healthy mix of
+`(oracle_success, counterfactual_failure)` and
+`(oracle_success, counterfactual_failure_with_guard_hit)` shapes.
 
-- **SFT data**: oracle trajectories already provide multi-step
-  reproduce → inspect → patch → verify → finish traces. Convert each
-  `TrajectoryStep` to a tool-use turn.
-- **RL data**: every step has a per-component reward and cumulative reward.
-  An RL trainer can either use `_step_total` per step or `final_success` +
-  shaped intermediate rewards.
-- **Verifier / critic data**: the trajectory + final report is exactly the
-  shape needed to train an outcome predictor (success / collateral /
-  reward-hacking). Negative trajectories from `naive` and `do_nothing`
-  (and future adversarial public-test-overfit baselines) seed the
-  contrastive pairs.
-- **Benchmark mode**: drop hidden-tests reward from the trajectory and only
-  count final success — equivalent to SWE-bench-style eval but with
-  procedural decontamination.
+See `docs/acceptance.md` for the exact reproducer and `docs/research-notes.md`
+for the design rationale + critical reception that drove v2.
 
-## Acceptance criteria status
+## Out of scope (v3 hooks)
 
-- `pytest` passes (11 / 11 tests).
-- `python -m swegraph generate --num-tasks 30 --out runs/tasks` works.
-- `python -m swegraph run --task <task> --baseline oracle --out <dir>` works.
-- `python -m swegraph eval --run <dir>` works.
-- Oracle baseline passes hidden tests on **30 / 30 = 100 %** of generated
-  tasks (sample command + numbers in
-  `docs/acceptance.md`).
-- `do_nothing` baseline fails 30 / 30 hidden-test runs but always emits a
-  valid trajectory.
-- Reward components and milestones are visible in `final_report.json` and
-  `replay.md`.
-- Public / hidden test separation: hidden tests are written to a temp dir
-  per run and never live in the workspace.
-
-## Next steps to make this research- and product-worthy
-
-1. **Real-repo ingestion** — pluggable repo loader (Git URL, commit pin,
-   pre-built virtualenv) so the same harness operates on SWE-Gym /
-   SWE-smith style instances.
-2. **Docker sandbox** — replace `LocalSandbox` with a per-task container
-   that pins Python version and dependencies; needed for cross-language
-   support.
-3. **More task families** — dependency migration, perf regression, security
-   patch, multi-file refactor, multi-service Docker Compose.
-4. **Adversarial baselines** — public-test-overfit, test-deletion,
-   pyproject-hijack — to validate the reward-hacking guards under stress.
-5. **LLM agent runner** — a tool-use loop that consumes only `user_prompt`
-   + `public_tests` and executes via the same Action API. Drop-in for any
-   model.
-6. **Prime Verifiers export** — package each task as an Environment Hub
-   entry (dataset + harness + reward function).
-7. **Counterfactual data for verifier training** — per task, run each
-   baseline + perturbations and label trajectories with outcome / reward
-   buckets.
-8. **GUI / computer-use bridge** — same task, but executed inside an IDE
-   running in the existing computer-use stack. The two reward systems share
-   structure; this is the long-term integration story.
-
-## Project layout
-
-```
-swegraph/
-  task.py                # generate_tasks, load_task, save_task
-  task_generators/       # bug_injection, config_bug, feature_addition
-  fixtures/repos/        # stats_utils, csv_tool, todo_cli
-  sandbox.py             # LocalSandbox: temp copy + run with timeout
-  actions.py             # ActionAPI used by baselines
-  baselines/             # do_nothing, oracle, naive (Action iterators)
-  reward.py              # RewardTracker + YAML/JSON loader
-  evaluator.py           # public + hidden tests + guards
-  tests_runner.py        # pytest counts + hidden test executor
-  trajectory.py          # JSONL logger
-  utils/                 # diffing, file_guard, prompts
-  cli.py                 # generate / run / eval / batch
-configs/
-  reward_default.yaml    # default reward weights (overridable per task)
-tests/                   # 11 tests covering generation, baselines, reward, eval
-```
+- Real-repo ingestion via mutmut on small Python packages (planned).
+- Docker-per-task sandbox (replaces `LocalSandbox`).
+- LLM agent adapter (drop-in for any model that consumes the user prompt +
+  public tests + `ActionAPI`).
+- Cross-language: a Rust or TS task family using `proptest` / `fast-check`.
+- Trained PRM artifact (the dataset is shipped; the trained model is not).
+- Calibrated decontamination metric (mutual information between hidden spec
+  and public-test surface).
+- Patch-DAG (multi-correct-patch equivalence-class clustering) — multi-month
+  research.

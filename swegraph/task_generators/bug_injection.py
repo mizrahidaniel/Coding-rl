@@ -1,41 +1,48 @@
 from __future__ import annotations
 
 from swegraph.schema import TaskSpec
+from swegraph.utils.metamorphic_extract import auto_metamorphic_spec
 from swegraph.utils.prompts import generate_prompts
 
 
-# Hidden tests deliberately probe interior indexes (not just p=0/100 which
-# hit the early-return paths). p=70 over a 10-element list separates the
-# correct (len-1)*p/100 formula from the buggy len*p/100 form.
-HIDDEN_TEST = '''from stats_utils.core import percentile
+# v1 kept a single hand-authored hidden test file. v2 replaces it with a
+# pair of validators:
+#   1. a property validator (Hypothesis) that asserts ``percentile`` returns
+#      a value bounded by ``min(values)..max(values)`` and is consistent for
+#      empty input - hidden, multi-correct-patch friendly,
+#   2. a metamorphic validator with relations auto-extracted from the public
+#      test source (``boundary_extrema`` for the bounded-output assert in the
+#      public test).
+#
+# A single legacy unit test stays as a regression anchor.
+HIDDEN_UNIT_TEST = '''from stats_utils.core import percentile
 
 
-def test_percentile_empty_returns_none():
-    assert percentile([], 50) is None
-
-
-def test_percentile_bounds():
-    data = [1, 2, 3, 4]
-    assert percentile(data, 0) == 1
-    assert percentile(data, 100) == 4
-
-
-def test_percentile_midpoint_small():
-    assert percentile([1, 2, 3, 4], 75) == 3
-
-
-def test_percentile_interior_index():
-    # (10-1)*0.7 = 6.3 -> idx 6 -> value 7
-    # buggy variant 10*0.7 = 7 -> idx 7 -> value 8
+def test_percentile_interior_index_anchor():
     assert percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 70) == 7
-
-
-def test_percentile_does_not_overflow():
-    # buggy variant would index past the end on len=4 at p=80:
-    # 4*0.8 = 3.2 -> idx 3 -> value 4
-    # correct: (4-1)*0.8 = 2.4 -> idx 2 -> value 3
-    assert percentile([1, 2, 3, 4], 80) == 3
 '''
+
+
+_PUBLIC_TEST_SRC = '''from stats_utils.core import percentile
+
+
+def test_percentile_midpoint():
+    assert percentile([1, 2, 3, 4], 75) == 3
+'''
+
+
+_PROPERTY_VALIDATOR = {
+    "kind": "property",
+    "module": "stats_utils.core",
+    "function": "percentile",
+    "strategy": [
+        {"kind": "lists", "of": "integers", "min_value": -1000, "max_value": 1000, "min_size": 1, "max_size": 30},
+        {"kind": "integers", "min_value": 0, "max_value": 100},
+    ],
+    # property: result is None or lies in [min(args[0]), max(args[0])]
+    "assertion": "result is None or (min(args[0]) <= result <= max(args[0]))",
+    "max_examples": 120,
+}
 
 
 def generate_bug_injection_task(
@@ -43,6 +50,29 @@ def generate_bug_injection_task(
 ) -> TaskSpec:
     repo_id = "stats_utils"
     formal, user, hidden = generate_prompts(repo_id, "bug_injection", "percentile", seed=seed)
+
+    metamorphic = auto_metamorphic_spec(
+        module="stats_utils.core",
+        function="percentile",
+        strategy=_PROPERTY_VALIDATOR["strategy"],
+        public_test_src=_PUBLIC_TEST_SRC,
+        # If extraction finds nothing, force boundary_extrema as a safe fallback
+        # (the property is also asserted by the standalone PropertyValidator).
+        fallback_relations=["boundary_extrema"],
+        relation_args={"boundary_extrema": {"arg_index": 0}},
+        max_examples=80,
+    )
+
+    hidden_validators: list[dict] = [
+        _PROPERTY_VALIDATOR,
+        {
+            "kind": "unit_tests",
+            "files": {"tests/test_hidden_bug.py": HIDDEN_UNIT_TEST},
+        },
+    ]
+    if metamorphic is not None:
+        hidden_validators.insert(1, metamorphic)
+
     return TaskSpec(
         task_id=task_id,
         repo_id=repo_id,
@@ -52,13 +82,14 @@ def generate_bug_injection_task(
         formal_prompt=formal,
         hidden_formal_spec=hidden,
         public_tests=["tests/test_public_bug.py"],
-        hidden_tests={"tests/test_hidden_bug.py": HIDDEN_TEST},
+        hidden_validators=hidden_validators,
         mutation_metadata={
             "type": "replace_text",
             "path": "stats_utils/core.py",
             "old": "idx = int(round((len(sorted_vals) - 1) * (p / 100)))",
             "new": "idx = int(round(len(sorted_vals) * (p / 100)))",
             "relevant_files": ["stats_utils/core.py"],
+            "root_cause_file": "stats_utils/core.py",
         },
         oracle_metadata={"patch_type": "reverse_mutation"},
         allowed_files=["stats_utils/core.py", "tests/test_public_bug.py"],
