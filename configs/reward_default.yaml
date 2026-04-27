@@ -1,0 +1,13 @@
+public_failure_reproduced: 0.2
+relevant_file_read: 0.1
+implementation_edited: 0.2
+public_tests_improved: 0.5
+public_tests_pass: 1.0
+hidden_tests_pass: 2.0
+protected_files_unchanged: 0.3
+no_test_deletion: 0.3
+invalid_command: -0.1
+repeated_noop: -0.05
+unrelated_files_changed: -0.2
+tests_deleted: -0.5
+step_cost: -0.01
